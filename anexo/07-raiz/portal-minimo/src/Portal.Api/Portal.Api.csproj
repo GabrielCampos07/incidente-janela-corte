@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Portal</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Os arquivos do anexo ficam onde estão; o projeto só aponta pra eles. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\corte\JanelaDeCorte.cs" Link="Anexo\corte\JanelaDeCorte.cs" />
+    <Compile Include="..\..\..\corte\RecebimentoMiddleware.cs" Link="Anexo\corte\RecebimentoMiddleware.cs" />
+    <Compile Include="..\..\..\idempotencia\CriarOrdemHandler.cs" Link="Anexo\idempotencia\CriarOrdemHandler.cs" />
+    <Compile Include="..\..\..\idempotencia\OutboxPublisher.cs" Link="Anexo\idempotencia\OutboxPublisher.cs" />
+    <Compile Include="..\..\..\consulta-posicoes\ConsultaPosicoes.cs" Link="Anexo\consulta-posicoes\ConsultaPosicoes.cs" />
+    <Compile Include="..\..\..\consulta-posicoes\PreviaEnquadramento.cs" Link="Anexo\consulta-posicoes\PreviaEnquadramento.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.20" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+  </ItemGroup>
+
+</Project>

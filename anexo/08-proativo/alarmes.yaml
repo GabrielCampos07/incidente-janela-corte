@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Alarmes que teriam detectado o incidente de 22/10 antes do cliente.
+
+Parameters:
+  ApiName: { Type: String, Default: portal-distribuidor }
+  Stage: { Type: String, Default: prod }
+  DbInstance: { Type: String, Default: portal-distribuidor-db }
+  OrcamentoConexoes: { Type: Number, Default: 280, Description: "tasks x (pool escrita + pool leitura)" }
+  ApiLogGroup: { Type: String, Default: /ecs/api-ordens }
+  PlantaoEndpoint: { Type: String, Description: "Endpoint HTTPS do Opsgenie/PagerDuty para o plantão da squad" }
+  OperacoesEmail: { Type: String, Description: "Lista de Operações para risco no horário de corte" }
+
+Resources:
+  PlantaoTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: portal-plantao
+      Subscription:
+        - { Protocol: https, Endpoint: { Ref: PlantaoEndpoint } }
+
+  CorteTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: portal-risco-corte
+      Subscription:
+        - { Protocol: https, Endpoint: { Ref: PlantaoEndpoint } }
+        - { Protocol: email, Endpoint: { Ref: OperacoesEmail } }
+
+  # SLO: 99,9% das requisições de POST /ordens sem 5xx. Consumo rápido do orçamento de erro:
+  # taxa de erro acima de 14,4x o permitido (1,44%) em 5 min E em 1 h.
+  # 5XXError com estatística Average é a fração de requisições com 5xx.
+  SloOrdensErro5Min:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-post-ordens-erro-5min
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - { Name: ApiName, Value: { Ref: ApiName } }
+        - { Name: Stage, Value: { Ref: Stage } }
+        - { Name: Resource, Value: /ordens }
+        - { Name: Method, Value: POST }
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0.0144
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SloOrdensErro1h:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-post-ordens-erro-1h
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - { Name: ApiName, Value: { Ref: ApiName } }
+        - { Name: Stage, Value: { Ref: Stage } }
+        - { Name: Resource, Value: /ordens }
+        - { Name: Method, Value: POST }
+      Statistic: Average
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0.0144
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SloOrdensConsumoRapido:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: portal-post-ordens-slo-consumo-rapido
+      AlarmDescription: "Orçamento de erro do POST /ordens queimando 14,4x. Runbook: runbooks/post-ordens-degradado.md"
+      AlarmRule:
+        "Fn::Sub": "ALARM(${SloOrdensErro5Min}) AND ALARM(${SloOrdensErro1h})"
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  LatenciaOrdens:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-post-ordens-p95-alto
+      AlarmDescription: "p95 do POST /ordens acima de 1 s por 3 min. Runbook: runbooks/post-ordens-degradado.md"
+      Namespace: AWS/ApiGateway
+      MetricName: Latency
+      Dimensions:
+        - { Name: ApiName, Value: { Ref: ApiName } }
+        - { Name: Stage, Value: { Ref: Stage } }
+        - { Name: Resource, Value: /ordens }
+        - { Name: Method, Value: POST }
+      ExtendedStatistic: p95
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  ConexoesRds:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-rds-conexoes-80pct
+      AlarmDescription: "Conexões acima de 80% do orçamento. Runbook: runbooks/pool-esgotado.md"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      Threshold: 0
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: PlantaoTopic }]
+      Metrics:
+        - Id: conexoes
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/RDS
+              MetricName: DatabaseConnections
+              Dimensions: [{ Name: DBInstanceIdentifier, Value: { Ref: DbInstance } }]
+            Period: 60
+            Stat: Maximum
+        - Id: acima
+          Expression: { "Fn::Sub": "IF(conexoes > ${OrcamentoConexoes} * 0.8, 1, 0)" }
+          ReturnData: true
+
+  CpuRds:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-rds-cpu-85pct
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions: [{ Name: DBInstanceIdentifier, Value: { Ref: DbInstance } }]
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  PoolEsgotadoFiltro:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: { Ref: ApiLogGroup }
+      FilterPattern: '"connection pool has been exhausted"'
+      MetricTransformations:
+        - { MetricNamespace: Portal/Api, MetricName: PoolEsgotado, MetricValue: "1", DefaultValue: 0 }
+
+  PoolEsgotado:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-npgsql-pool-esgotado
+      AlarmDescription: "Qualquer ocorrência é anormal. Runbook: runbooks/pool-esgotado.md"
+      Namespace: Portal/Api
+      MetricName: PoolEsgotado
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  IdadeFila:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-boletas-pendentes-idade-2min
+      AlarmDescription: "Mensagem mais antiga com mais de 2 min. Runbook: runbooks/fila-acumulando.md"
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions: [{ Name: QueueName, Value: boletas-pendentes }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 120
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  Dlq:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-boletas-dlq-nao-vazia
+      AlarmDescription: "Qualquer mensagem na DLQ. Runbook: runbooks/dlq.md (não fazer redrive sem classificar)"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: boletas-pendentes-dlq }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: PlantaoTopic }]
+
+  # Métrica publicada pela API (EMF) a cada ordem: registrada_em - recebida_em, em ms.
+  # Distância alta perto das 14h30 significa ordens em risco de cair no dia errado se algum caminho ainda usar o horário de gravação.
+  AtrasoRegistroPertoDoCorte:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: portal-atraso-registro-ordem-5s
+      AlarmDescription: "p99 entre chegada e registro acima de 5 s. Runbook: runbooks/risco-corte.md"
+      Namespace: Portal/Ordens
+      MetricName: AtrasoRegistroMs
+      ExtendedStatistic: p99
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [{ Ref: CorteTopic }]

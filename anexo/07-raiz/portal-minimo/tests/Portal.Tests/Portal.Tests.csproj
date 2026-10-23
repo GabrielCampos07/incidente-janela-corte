@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <!-- Os testes do anexo ficam onde estão; o projeto só aponta pra eles. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\corte\JanelaDeCorteTests.cs" Link="Anexo\corte\JanelaDeCorteTests.cs" />
+    <Compile Include="..\..\..\idempotencia\IdempotenciaTests.cs" Link="Anexo\idempotencia\IdempotenciaTests.cs" />
+  </ItemGroup>
+
+  <!-- SQL aplicado no container: tabelas base e depois o schema.sql do anexo. -->
+  <ItemGroup>
+    <Content Include="..\..\sql\00-tabelas-base.sql" Link="sql\00-tabelas-base.sql" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\idempotencia\schema.sql" Link="sql\10-schema.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Portal.Api\Portal.Api.csproj" />
+  </ItemGroup>
+
+</Project>

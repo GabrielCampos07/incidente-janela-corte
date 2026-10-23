@@ -1,0 +1,104 @@
+{
+  "start": "2026-10-22T16:30:00.000Z",
+  "end": "2026-10-22T18:00:00.000Z",
+  "periodOverride": "inherit",
+  "widgets": [
+    {
+      "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "Requisições por rota (prévia x ordens)",
+        "region": "sa-east-1", "period": 60, "stat": "Sum", "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApiGateway", "Count", "ApiName", "portal-distribuidor", "Stage", "prod", "Resource", "/enquadramento/previa", "Method", "POST", { "label": "prévia" }],
+          ["AWS/ApiGateway", "Count", "ApiName", "portal-distribuidor", "Stage", "prod", "Resource", "/ordens", "Method", "POST", { "label": "POST /ordens" }]
+        ],
+        "annotations": { "vertical": [
+          { "label": "Deploy 13h50", "value": "2026-10-22T16:50:00Z" },
+          { "label": "Início degradação 14h12", "value": "2026-10-22T17:12:00Z" },
+          { "label": "Corte 14h30", "value": "2026-10-22T17:30:00Z" }
+        ] }
+      }
+    },
+    {
+      "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "POST /ordens: latência e 5xx",
+        "region": "sa-east-1", "period": 60, "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApiGateway", "Latency", "ApiName", "portal-distribuidor", "Stage", "prod", "Resource", "/ordens", "Method", "POST", { "stat": "p95", "label": "p95 total" }],
+          ["AWS/ApiGateway", "IntegrationLatency", "ApiName", "portal-distribuidor", "Stage", "prod", "Resource", "/ordens", "Method", "POST", { "stat": "p95", "label": "p95 integração" }],
+          ["AWS/ApiGateway", "5XXError", "ApiName", "portal-distribuidor", "Stage", "prod", "Resource", "/ordens", "Method", "POST", { "stat": "Sum", "yAxis": "right", "label": "5xx" }]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 0, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "ALB: 502 e hosts unhealthy",
+        "region": "sa-east-1", "period": 60, "stat": "Sum", "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApplicationELB", "HTTPCode_ELB_502_Count", "LoadBalancer", "app/portal-api/0123456789abcdef"],
+          ["AWS/ApplicationELB", "HTTPCode_ELB_504_Count", "LoadBalancer", "app/portal-api/0123456789abcdef"],
+          ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", "targetgroup/api-ordens/0123456789abcdef", "LoadBalancer", "app/portal-api/0123456789abcdef", { "stat": "Maximum", "yAxis": "right" }]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 8, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "ECS api-ordens: CPU e memória",
+        "region": "sa-east-1", "period": 60, "stat": "Maximum", "view": "timeSeries",
+        "metrics": [
+          ["AWS/ECS", "CPUUtilization", "ClusterName", "portal-distribuidor", "ServiceName", "api-ordens"],
+          ["AWS/ECS", "MemoryUtilization", "ClusterName", "portal-distribuidor", "ServiceName", "api-ordens"]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 16, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "RDS: CPU, conexões e carga (AAS)",
+        "region": "sa-east-1", "period": 60, "view": "timeSeries",
+        "metrics": [
+          ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "portal-distribuidor-db", { "stat": "Maximum" }],
+          ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "portal-distribuidor-db", { "stat": "Maximum", "yAxis": "right" }],
+          ["AWS/RDS", "DBLoadCPU", "DBInstanceIdentifier", "portal-distribuidor-db", { "stat": "Average" }],
+          ["AWS/RDS", "DBLoadNonCPU", "DBInstanceIdentifier", "portal-distribuidor-db", { "stat": "Average" }]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 0, "y": 12, "width": 12, "height": 6,
+      "properties": {
+        "title": "boletas-pendentes: enviadas x recebidas x apagadas",
+        "region": "sa-east-1", "period": 60, "stat": "Sum", "view": "timeSeries",
+        "metrics": [
+          ["AWS/SQS", "NumberOfMessagesSent", "QueueName", "boletas-pendentes"],
+          ["AWS/SQS", "NumberOfMessagesReceived", "QueueName", "boletas-pendentes"],
+          ["AWS/SQS", "NumberOfMessagesDeleted", "QueueName", "boletas-pendentes"]
+        ]
+      }
+    },
+    {
+      "type": "metric", "x": 12, "y": 12, "width": 12, "height": 6,
+      "properties": {
+        "title": "Fila: backlog, em processamento, idade e DLQ",
+        "region": "sa-east-1", "period": 60, "stat": "Maximum", "view": "timeSeries",
+        "metrics": [
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "boletas-pendentes"],
+          ["AWS/SQS", "ApproximateNumberOfMessagesNotVisible", "QueueName", "boletas-pendentes"],
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "boletas-pendentes-dlq", { "label": "DLQ" }],
+          ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "boletas-pendentes", { "yAxis": "right" }]
+        ]
+      }
+    },
+    {
+      "type": "log", "x": 0, "y": 18, "width": 24, "height": 6,
+      "properties": {
+        "title": "Erros Npgsql por minuto",
+        "region": "sa-east-1", "view": "timeSeries",
+        "query": "SOURCE '/ecs/api-ordens' | filter @message like /connection pool has been exhausted|Timeout during reading attempt|NpgsqlException/ | stats count() as erros by bin(1m)"
+      }
+    }
+  ]
+}
