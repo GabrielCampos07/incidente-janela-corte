@@ -2,8 +2,6 @@
 
 > **Repositório:** https://github.com/GabrielCampos07/incidente-janela-corte
 
-Isso aqui é um documento de raciocínio, não uma implementação do portal. Código só aparece no trecho mínimo que sustenta cada argumento.
-
 ## Resumo
 
 - **Antes das 14h30 de hoje:** só mexo no que dá pra desfazer em minutos e sem deploy de código (no máximo uma revisão nova de configuração da task definition). Congelo deploy, seguro a prévia de enquadramento, subo a API de 2 pra 4 tasks com o pool caindo pra 50 por task (mesmo teto de 200 conexões), passo o visibility timeout da fila pra 180 s, garanto os access logs do API Gateway com o horário de chegada e fico em sala de guerra até 14h45.
@@ -14,7 +12,7 @@ Isso aqui é um documento de raciocínio, não uma implementação do portal. C�
 
 ---
 
-## 1) Investigação antes da solução
+## 1) Investigação
 
 ### Primeiro a linha do tempo, depois a hipótese
 
@@ -49,12 +47,12 @@ A série que mexe primeiro tá mais perto da causa. Sem essa visão, cada hipót
 - **Confirma:** conexões no teto com o CPU do RDS baixo.
 - **Descarta em parte:** o RDS ficou em 96% de CPU, o que aponta pra consulta cara como causa principal. H3 pode estar junto, mas não explica a CPU.
 
-**H4. Contenção de lock.** O integrador atualizando status enquanto a API insere.
+**H4. Contenção de lock.** O integrador atualiza o status enquanto a API insere.
 - **Onde olho:** esperas `Lock:transactionid` ou `Lock:tuple` no Performance Insights.
-- **Descarta:** se for lock, CPU não é o gargalo. Ou é isso, ou é H1/H2 como causa principal.
+- **Descarta:** se for lock, a CPU não é o gargalo. Ou é isso, ou é H1/H2 como causa principal.
 
 **H5. Outro cliente no banco no mesmo horário**, como a Lambda de relatórios ou um job agendado.
-- **Onde olho:** carga do Performance Insights por usuário e host do banco, e invocações e duração da Lambda.
+- **Onde olho:** carga do Performance Insights por usuário e host do banco e invocações e duração da Lambda.
 
 **H6. Cascata de health check.** Se o health check consulta o banco, o pool esgotado faz a task ser marcada como unhealthy, o ECS a mata e a capacidade cai pela metade.
 - **Onde olho:** eventos do serviço no ECS, `UnHealthyHostCount` e o 502 do ALB.
@@ -64,7 +62,7 @@ A série que mexe primeiro tá mais perto da causa. Sem essa visão, cada hipót
 
 ### Hipóteses para o acúmulo na fila e as mensagens na DLQ
 
-**H8. Visibility timeout menor que o processamento.** Aos 30 segundos a mensagem volta e é processada de novo, com a primeira execução ainda rodando.
+**H8. Visibility timeout menor que o processamento.** Aos 30 segundos, a mensagem volta e é processada de novo, com a primeira execução ainda rodando.
 - **Onde olho:** razão entre `NumberOfMessagesReceived` e `NumberOfMessagesSent` bem acima de 1; `ApproximateReceiveCount` nas mensagens da DLQ; a mesma ordem processada por tasks diferentes nos logs do integrador.
 
 **H9. Sistema de processamento lento.** Latência das chamadas de saída do integrador subindo junto com `ApproximateAgeOfOldestMessage`.
@@ -82,8 +80,8 @@ A série que mexe primeiro tá mais perto da causa. Sem essa visão, cada hipót
 Primeiro vejo **qual serviço** subiu (API, front ou integrador) pelos eventos do ECS. Depois leio o diff no Git, as migrations aplicadas e o diff da task definition (pool, timeouts, health check, `stopTimeout`).
 
 - **Torna o deploy causa provável:** degrau de latência em 13h50 com o mesmo volume; consulta nova no Top SQL; diff tocando consulta, prévia, pool, índice ou health check; em homologação, a versão nova degrada com o perfil do pico e a anterior não.
-- **Descarta o deploy:** latência acompanhando volume, não horário; mesmas consultas com o mesmo custo; diff fora do caminho crítico; p95 já subindo nos dias anteriores.
-- **De todo jeito:** o deploy reiniciou as tasks (pool e cache vazios) e, se pegou o integrador, matou mensagem no meio do processamento. Mesmo sem ser a causa, piorou tudo a 20 minutos do pico.
+- **Descarta o deploy:** latência acompanhando o volume, não o horário; mesmas consultas com o mesmo custo; diff fora do caminho crítico; p95 já subindo nos dias anteriores.
+- **De todo jeito:** o deploy reiniciou as tasks (pool e cache vazios) e, se pegou o integrador, matou a mensagem no meio do processamento. Mesmo sem ser a causa, piorou tudo a 20 minutos do pico.
 
 ### Decisão sob pressão
 
@@ -108,7 +106,7 @@ Primeiro vejo **qual serviço** subiu (API, front ou integrador) pelos eventos d
 
 ### O que respondo hoje para Relacionamento
 
-> Confirmamos instabilidade no portal ontem a partir das 14h12, e ela pode ter feito ordens enviadas antes das 14h30 serem registradas com horário posterior. Temos um registro independente do horário de chegada de cada requisição (os logs de entrada da AWS, que não dependem do processamento) e estamos cruzando as ordens uma a uma. Até amanhã às 12h entregamos cada uma das 37 classificada em três grupos: recebida antes do corte, recebida depois, ou tentativa antes do corte com reenvio depois. Para as recebidas antes do corte, a recomendação técnica é tratá-las como D0; a forma de reparação será definida com Operações e Compliance. Também vamos procurar ativamente outras ordens na mesma situação que ainda não geraram reclamação. A causa ainda está em apuração, e não atribuiremos a falha ao distribuidor sem evidência.
+> Confirmamos instabilidade no portal ontem a partir das 14h12, e ela pode ter feito com que ordens enviadas antes das 14h30 fossem registradas com horário posterior. Temos um registro independente do horário de chegada de cada requisição (os logs de entrada da AWS, que não dependem do processamento) e estamos cruzando as ordens uma a uma. Até amanhã às 12h entregamos cada uma das 37 classificada em três grupos: recebida antes do corte, recebida depois, ou tentativa antes do corte com reenvio depois. Para as recebidas antes do corte, a recomendação técnica é tratá-las como D0; a forma de reparação será definida com Operações e Compliance. Também vamos procurar ativamente outras ordens na mesma situação que ainda não geraram reclamação. A causa ainda está em apuração, e não atribuiremos a falha ao distribuidor sem evidência.
 
 Deixo de fora de propósito três coisas: prometer ressarcimento (não é decisão de engenharia), cravar a causa (ainda não tá confirmada) e dar a entender que o distribuidor errou.
 
@@ -376,7 +374,7 @@ public DateOnly DataDeProcessamento(DateTimeOffset recebidaEm)
 **Corrigindo os 37:**
 1. Pra cada ordem, procuro nos access logs do API Gateway (ou do ALB, se tiver) a primeira tentativa de POST correspondente e classifico: chegou antes do corte; tentou antes, falhou e reenviou depois; ou chegou depois.
 2. **Abro a busca pra todas as ordens** registradas entre 14h30 e 14h45 com chegada antes do corte. Os 37 são os que reclamaram, não necessariamente todo mundo que foi afetado.
-3. Pra cada ordem com direito a D0, entrego pra Operações e Compliance valor, cota de D0, cota de D+1 e diferença. A forma de reparação é decisão de negócio.
+3. Pra cada ordem com direito a D0, entrego pra Operações e Compliance o valor, cota de D0, cota de D+1 e diferença. A forma de reparação é decisão de negócio.
 4. Não mexo no registro original. Toda correção vira lançamento de ajuste auditável: quem, quando, por quê e com qual evidência.
 
 ---
@@ -400,7 +398,7 @@ Se rolar resistência, levo pro tech lead como questão de processo, não de pes
 
 - **Tamanho do PR:** 1.800 linhas não dá pra revisar. Interface, API, consulta e regra vieram juntas, e a aprovação sem discussão foi consequência, não azar.
 - **Responsabilidade única (SRP):** o endpoint da prévia provavelmente consulta, aplica a regra de enquadramento e formata a resposta. Se a mesma regra existe na validação do envio, são duas implementações que podem divergir. Extraio uma `RegraDeEnquadramento` de domínio usada pelos dois.
-- **Inversão de dependência (DIP):** controller dependendo direto do `DbContext` impede testar a regra sem banco e impede trocar a fonte por cache ou réplica. Introduzo uma porta `IConsultaPosicoes` com implementação de leitura.
+- **Inversão de dependência (DIP):** controller dependendo diretamente do `DbContext` impede testar a regra sem banco e impede trocar a fonte por cache ou réplica. Introduzo uma porta `IConsultaPosicoes` com implementação de leitura.
 - **Aberto/fechado (OCP):** regras por tipo de fundo em cadeias de `if`/`switch`. Uso uma estratégia por classe de fundo.
 - **Segregação de interfaces (ISP):** repositório genérico devolvendo entidades com `Include` "por precaução" é exatamente o padrão que gerou a consulta cara. Cada uso ganha um modelo de leitura próprio.
 - **Clean Code:** métodos longos, constantes fixas (o 14h30, que pode variar por fundo), ausência de `CancellationToken`, de timeouts e de métricas.
@@ -430,7 +428,7 @@ Os testes que teriam barrado o incidente, cada um na sua camada:
 > **Da minha experiência.** No dark-lashes (Next 15, App Router, checkout Stripe por Route Handler), o `BuyButton` desabilita o botão e mostra "Abrindo…" durante o `fetch`, e a chave secreta fica só no servidor. Isso resolve o duplo clique. Olhando de novo depois desse incidente, vejo o limite: em erro, o botão libera um novo clique sem chave de idempotência, e no portal é justamente esse reenvio às cegas depois do timeout que vira duplicata. Nas landings (git-landing, rocknfields, Next 16) uso `output: "export"` de propósito, porque são estáticas; dado de ordem e posição nunca pode ir por esse caminho.
 
 - **Envio como máquina de estados:** `ocioso → enviando → aceita | rejeitada | verificando`. A `Idempotency-Key` nasce quando a linha da boleta é criada (não no clique) e fica no `sessionStorage`.
-- **Timeout, 5xx e 409 nunca viram "tente novamente":** viram "verificando", com polling por chave (até 8 tentativas, com espera entre elas). Saiu `aceita` ou `rejeitada`, para; se esgotar, continua em "verificando" e o usuário pode reenviar, sempre com a mesma chave.
+- **Timeout, 5xx e 409 nunca viram "tente novamente":** viram "verificando", com polling por chave (até 8 tentativas, com espera entre elas). Saiu `aceita` ou `rejeitada`; se esgotar, continua em "verificando" e o usuário pode reenviar, sempre com a mesma chave.
 - **Recibo com horário oficial** ("recebida às 14h29m41s") vindo da API.
 - **Prévia:** uma chamada por grade, no blur ou com debounce de 400–500 ms, `AbortController` pra respostas velhas e cache curto por cotista e fundo.
 - **Cache:** dado privado é `cache: "no-store"`, em rota dinâmica e sem cache compartilhado.
@@ -516,13 +514,13 @@ Quatro melhorias, nessa ordem:
 
 **Como eu defendo com o PO:** falo de custo, não de boas práticas.
 - O incidente custou 37 reclamações formais, possível reparação financeira, horas de Relacionamento e Operações, exposição regulatória e dias da squad dedicados ao incidente.
-- Peço cerca de 20% da capacidade da sprint por três sprints, não uma parada de roadmap, começando pelo que sai rápido (alarme e rotação de credencial saem em dias).
+- Peço cerca de 20% da capacidade da sprint por três sprints, não uma parada de roadmap, começando pelo que sai rápido (alarme e rotação de credenciais saem em dias).
 - Mostro uma métrica: tempo pra detectar incidente, de "o cliente avisou" pra minutos.
 - Flag e deploy canário aceleram o próprio roadmap, porque dá pra lançar com menos medo.
 - O item 1 não entra em negociação com o PO: vai direto pra Segurança e pro DPO.
 
 **Riscos que não foram citados:**
-- **Webhooks sem assinatura e URLs cadastradas pelo distribuidor sem validação:** autenticidade e SSRF, por exemplo apontando pra `169.254.169.254`.
+- **Webhooks sem assinatura e URLs cadastradas pelo distribuidor sem validação:** autenticidade e SSRF, por exemplo, apontando pra `169.254.169.254`.
 - **Sem rate limit por distribuidor:** um único cliente derruba os outros 379.
 - **Sem reconciliação diária com o sistema de processamento:** se tivesse, as duplicadas teriam aparecido no mesmo dia.
 - **Lambda de relatórios lendo do primário** no horário de pico.
